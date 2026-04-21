@@ -92,14 +92,17 @@ const h3tsource = function (name, options) {
         // ocean tile when data is coastal). Return an empty but valid MVT
         // instead of tripping vt-pbf on null.
         if (!f) {
-          if (!!o.debug) console.log(`${zxy}: 0 features (empty tile), ${(performance.now() - t).toFixed(0)} ms`);
-          return new Uint8Array(0);
+          if (!!o.debug) console.log(`[h3t] ${zxy}: 0 features (empty tile), ${(performance.now() - t).toFixed(0)} ms`);
+          // return as ArrayBuffer (not Uint8Array) so MapLibre v5 accepts it
+          return new ArrayBuffer(0);
         }
         const fo = {};
         fo[o.sourcelayer] = f;
         const p = utils.topbf.fromGeojsonVt(fo, { "version": 2 });
-        if (!!o.debug) console.log(`${zxy}: ${g.features.length} features, ${(performance.now() - t).toFixed(0)} ms`);
-        return p;
+        if (!!o.debug) console.log(`[h3t] ${zxy}: ${g.features.length} feats (g), ${f.features ? f.features.length : '?'} feats (tile), sourcelayer=${o.sourcelayer}, ${p.byteLength}B, ${(performance.now() - t).toFixed(0)} ms`);
+        // vt-pbf returns a Uint8Array; MapLibre's promise-API expects the raw
+        // buffer. Give it ArrayBuffer to be safe across versions.
+        return p.buffer ? p.buffer.slice(p.byteOffset, p.byteOffset + p.byteLength) : p;
       });
 
     if (isPromiseAPI) {
