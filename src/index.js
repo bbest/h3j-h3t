@@ -58,12 +58,30 @@ const h3tsource = function (name, options) {
   const o = Object.assign({}, defaults, options, { "type": 'vector', "format": 'pbf' });
   o.generate = h3id => (o.geometry_type === 'Polygon') ? [utils.h3.h3ToGeoBoundary(h3id, true)] : utils.h3.h3ToGeo(h3id).reverse();
   if (!!o.promoteId) o.promoteId = 'h3id';
+  // MapLibre's addProtocol registry is GLOBAL — last registration of a given
+  // scheme wins. When two maps (or two sources on one map) both register
+  // 'h3tiles', the second overwrites the first, so the first source's
+  // closure is dead and its layer renders with the wrong sourcelayer
+  // (the surviving closure's). Give each source its own unique scheme so
+  // both closures coexist.
+  lib.__h3tSchemeCounter = (lib.__h3tSchemeCounter || 0) + 1;
+  const scheme = `h3t${lib.__h3tSchemeCounter}`;
+  // rewrite tile templates from h3tiles:// to h3tN:// so MapLibre dispatches
+  // to this source's dedicated handler.
+  if (Array.isArray(o.tiles)) {
+    o.tiles = o.tiles.map(t =>
+      typeof t === 'string' && t.startsWith('h3tiles://')
+        ? scheme + '://' + t.slice('h3tiles://'.length)
+        : t
+    );
+  }
+  if (!!o.debug) console.log(`[h3t] addSource "${name}" → scheme "${scheme}", sourcelayer="${o.sourcelayer}"`);
   // MapLibre GL JS v3+/v4 uses a promise-returning protocol handler signature:
   //   addProtocol(scheme, (params, abortController) => Promise<{data, cacheControl?, expires?}>)
   // Older v2 used callback style. We support BOTH: if the 2nd arg is a function
   // we assume callback style; otherwise treat it as an AbortController and
   // return a Promise.
-  lib.addProtocol('h3tiles', (params, cbOrCtl) => {
+  lib.addProtocol(scheme, (params, cbOrCtl) => {
     const isPromiseAPI = typeof cbOrCtl !== 'function';
     const u = `http${(o.https === false) ? '' : 's'}://${params.url.split('://')[1]}`;
     // Extract z/x/y from the URL path. The previous implementation split on
