@@ -66,9 +66,20 @@ const h3tsource = function (name, options) {
   lib.addProtocol('h3tiles', (params, cbOrCtl) => {
     const isPromiseAPI = typeof cbOrCtl !== 'function';
     const u = `http${(o.https === false) ? '' : 's'}://${params.url.split('://')[1]}`;
-    const s = params.url.split(/\/|\./i);
-    const l = s.length;
-    const zxy = s.slice(l - 4, l - 1).map(k => k * 1);
+    // Extract z/x/y from the URL path. The previous implementation split on
+    // both "/" and "." which breaks when the URL carries a query string with
+    // dots (e.g. ?release=v2026.04.08) — it would read "NaN" as the x coord
+    // and every tile came back empty. Match the path segment ".../<z>/<x>/<y>.h3t"
+    // explicitly before the query string.
+    const pathOnly = params.url.split('?')[0];
+    const m = pathOnly.match(/\/(\d+)\/(\d+)\/(\d+)\.h3t$/);
+    if (!m) {
+      const err = new Error(`h3t: cannot parse {z}/{x}/{y} from URL: ${params.url}`);
+      if (isPromiseAPI) return Promise.reject(err);
+      cbOrCtl(err);
+      return { cancel: () => {} };
+    }
+    const zxy = [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
     const controller = (isPromiseAPI && cbOrCtl && cbOrCtl.signal)
       ? cbOrCtl
       : new AbortController();
