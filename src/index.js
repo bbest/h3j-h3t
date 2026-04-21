@@ -58,16 +58,25 @@ const h3tsource = function (name, options) {
   const o = Object.assign({}, defaults, options, { "type": 'vector', "format": 'pbf' });
   o.generate = h3id => (o.geometry_type === 'Polygon') ? [utils.h3.h3ToGeoBoundary(h3id, true)] : utils.h3.h3ToGeo(h3id).reverse();
   if (!!o.promoteId) o.promoteId = 'h3id';
-  lib.addProtocol('h3tiles', (params, callback) => {
+  // MapLibre GL JS v3+/v4 uses a promise-returning protocol handler signature:
+  //   addProtocol(scheme, (params, abortController) => Promise<{data, cacheControl?, expires?}>)
+  // Older v2 used callback style. We support BOTH: if the 2nd arg is a function
+  // we assume callback style; otherwise treat it as an AbortController and
+  // return a Promise.
+  lib.addProtocol('h3tiles', (params, cbOrCtl) => {
+    const isPromiseAPI = typeof cbOrCtl !== 'function';
     const u = `http${(o.https === false) ? '' : 's'}://${params.url.split('://')[1]}`;
     const s = params.url.split(/\/|\./i);
     const l = s.length;
     const zxy = s.slice(l - 4, l - 1).map(k => k * 1);
-    const controller = new AbortController();
+    const controller = (isPromiseAPI && cbOrCtl && cbOrCtl.signal)
+      ? cbOrCtl
+      : new AbortController();
     const signal = controller.signal;
     let t;
     if (o.timeout > 0) setTimeout(() => controller.abort(), o.timeout);
-    fetch(u, { signal })
+
+    const buildTile = () => fetch(u, { signal })
       .then(r => {
         if (r.ok) {
           t = performance.now();
@@ -80,29 +89,38 @@ const h3tsource = function (name, options) {
       .then(g => {
         const f = utils.tovt(g).getTile(...zxy);
         // getTile() returns null when no features land in this tile (e.g. an
-        // ocean tile when data is coastal). Passing null into vt-pbf throws
-        // "Cannot read properties of null" which MapLibre then surfaces as
-        // "Cannot read properties of undefined (reading 'data')". Return an
-        // empty pbf instead — represents a valid but feature-less vector tile.
+        // ocean tile when data is coastal). Return an empty but valid MVT
+        // instead of tripping vt-pbf on null.
         if (!f) {
           if (!!o.debug) console.log(`${zxy}: 0 features (empty tile), ${(performance.now() - t).toFixed(0)} ms`);
-          callback(null, new Uint8Array(0), null, null);
-          return;
+          return new Uint8Array(0);
         }
         const fo = {};
         fo[o.sourcelayer] = f;
-        const
-          p = utils.topbf.fromGeojsonVt(
-            fo,
-            { "version": 2 }
-          );
+        const p = utils.topbf.fromGeojsonVt(fo, { "version": 2 });
         if (!!o.debug) console.log(`${zxy}: ${g.features.length} features, ${(performance.now() - t).toFixed(0)} ms`);
-        callback(null, p, null, null);
-      })
+        return p;
+      });
+
+    if (isPromiseAPI) {
+      // v3+/v4 promise API: return { data, cacheControl?, expires? }
+      return buildTile()
+        .then(data => ({ data }))
+        .catch(e => {
+          if (e.name === 'AbortError') {
+            e = new Error(`Timeout: Tile .../${zxy.join('/')}.h3t is taking too long to fetch`);
+          }
+          throw e;
+        });
+    }
+    // v2 callback API
+    buildTile()
+      .then(data => cbOrCtl(null, data, null, null))
       .catch(e => {
         if (e.name === 'AbortError') e.message = `Timeout: Tile .../${zxy.join('/')}.h3t is taking too long to fetch`;
-        callback(new Error(e));
+        cbOrCtl(e);
       });
+    return { cancel: () => controller.abort() };
   });
   this.addSource(name, vtclean(o));
 };
