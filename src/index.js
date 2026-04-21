@@ -79,6 +79,16 @@ const h3tsource = function (name, options) {
       .then(js => h3jparser(js, o))
       .then(g => {
         const f = utils.tovt(g).getTile(...zxy);
+        // getTile() returns null when no features land in this tile (e.g. an
+        // ocean tile when data is coastal). Passing null into vt-pbf throws
+        // "Cannot read properties of null" which MapLibre then surfaces as
+        // "Cannot read properties of undefined (reading 'data')". Return an
+        // empty pbf instead — represents a valid but feature-less vector tile.
+        if (!f) {
+          if (!!o.debug) console.log(`${zxy}: 0 features (empty tile), ${(performance.now() - t).toFixed(0)} ms`);
+          callback(null, new Uint8Array(0), null, null);
+          return;
+        }
         const fo = {};
         fo[o.sourcelayer] = f;
         const
