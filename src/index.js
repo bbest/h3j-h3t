@@ -56,7 +56,21 @@ const filterObject = (obj, callback) => {
 */
 const h3tsource = function (name, options) {
   const o = Object.assign({}, defaults, options, { "type": 'vector', "format": 'pbf' });
-  o.generate = h3id => (o.geometry_type === 'Polygon') ? [utils.h3.h3ToGeoBoundary(h3id, true)] : utils.h3.h3ToGeo(h3id).reverse();
+  o.generate = h3id => {
+    if (o.geometry_type !== 'Polygon') return utils.h3.h3ToGeo(h3id).reverse();
+    const ring = utils.h3.h3ToGeoBoundary(h3id, true);
+    // Nick Rabinowitz fixTransmeridian (https://observablehq.com/@nrabinowitz/mapbox-utils):
+    // a ring with any arc > 180° of longitude is transmeridian; shift its
+    // negative-longitude vertices by +360° so it stays continuous near +180°
+    // instead of wrapping the globe.
+    for (let i = 0; i < ring.length; i++) {
+      if (Math.abs(ring[0][0] - ring[(i + 1) % ring.length][0]) > 180) {
+        for (const c of ring) if (c[0] < 0) c[0] += 360;
+        break;
+      }
+    }
+    return [ring];
+  };
   if (!!o.promoteId) o.promoteId = 'h3id';
   // MapLibre's addProtocol registry is GLOBAL — last registration of a given
   // scheme wins. When two maps (or two sources on one map) both register
@@ -116,6 +130,22 @@ const h3tsource = function (name, options) {
       })
       .then(js => h3jparser(js, o))
       .then(g => {
+        // Tiled rendering: a cell straddling ±180° is fetched into more than
+        // one {z}/{x}/{y} tile (the server returns it to both edge tiles). Place
+        // each cell on the side of the antimeridian THIS tile sits on, so its
+        // two halves draw in their respective edge tiles and meet at 180°.
+        const tileLng = (zxy[1] + 0.5) / (1 << zxy[0]) * 360 - 180;
+        for (const ft of g.features) {
+          if (ft.geometry.type !== 'Polygon') continue;
+          const r = ft.geometry.coordinates[0];
+          let s = 0; const ref = r[0][0];
+          while (ref + s - tileLng >  180) s -= 360;
+          while (ref + s - tileLng < -180) s += 360;
+          // rebuild (not mutate): h3ToGeoBoundary returns a CLOSED ring whose
+          // first and last points are the same object — an in-place += would
+          // shift that shared vertex twice and fling it ~360° off (a sliver).
+          if (s) ft.geometry.coordinates[0] = r.map(c => [c[0] + s, c[1]]);
+        }
         const f = utils.tovt(g).getTile(...zxy);
         // getTile() returns null when no features land in this tile (e.g. an
         // ocean tile when data is coastal). Return an empty but valid MVT
@@ -171,7 +201,21 @@ const h3jsource = function (name, options) {
   const signal = controller.signal;
   const o = Object.assign({}, defaults, options, { "type": 'geojson' });
   let t;
-  o.generate = h3id => (o.geometry_type === 'Polygon') ? [utils.h3.h3ToGeoBoundary(h3id, true)] : utils.h3.h3ToGeo(h3id).reverse();
+  o.generate = h3id => {
+    if (o.geometry_type !== 'Polygon') return utils.h3.h3ToGeo(h3id).reverse();
+    const ring = utils.h3.h3ToGeoBoundary(h3id, true);
+    // Nick Rabinowitz fixTransmeridian (https://observablehq.com/@nrabinowitz/mapbox-utils):
+    // a ring with any arc > 180° of longitude is transmeridian; shift its
+    // negative-longitude vertices by +360° so it stays continuous near +180°
+    // instead of wrapping the globe.
+    for (let i = 0; i < ring.length; i++) {
+      if (Math.abs(ring[0][0] - ring[(i + 1) % ring.length][0]) > 180) {
+        for (const c of ring) if (c[0] < 0) c[0] += 360;
+        break;
+      }
+    }
+    return [ring];
+  };
   if (!!o.promoteId) o.promoteId = 'h3id';
   if (o.timeout > 0) setTimeout(() => controller.abort(), o.timeout);
   if (typeof o.data === 'string') {
@@ -217,7 +261,21 @@ lib.Map.prototype.addH3JSource = h3jsource;
 */
 const h3jsetdata = function (name, data, options) {
   const o = Object.assign({}, defaults, options);
-  o.generate = h3id => (o.geometry_type === 'Polygon') ? [utils.h3.h3ToGeoBoundary(h3id, true)] : utils.h3.h3ToGeo(h3id).reverse();
+  o.generate = h3id => {
+    if (o.geometry_type !== 'Polygon') return utils.h3.h3ToGeo(h3id).reverse();
+    const ring = utils.h3.h3ToGeoBoundary(h3id, true);
+    // Nick Rabinowitz fixTransmeridian (https://observablehq.com/@nrabinowitz/mapbox-utils):
+    // a ring with any arc > 180° of longitude is transmeridian; shift its
+    // negative-longitude vertices by +360° so it stays continuous near +180°
+    // instead of wrapping the globe.
+    for (let i = 0; i < ring.length; i++) {
+      if (Math.abs(ring[0][0] - ring[(i + 1) % ring.length][0]) > 180) {
+        for (const c of ring) if (c[0] < 0) c[0] += 360;
+        break;
+      }
+    }
+    return [ring];
+  };
   if (!!o.promoteId) o.promoteId = 'h3id';
   const controller = new AbortController();
   const signal = controller.signal;
